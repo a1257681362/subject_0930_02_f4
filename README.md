@@ -55,5 +55,21 @@
 
 验收：`mvn test -Dtest=FeedFormulaFeedingAcceptanceTest`，17 个检查点逐段输出报告，失败即停并给出停点。
 
+## 养殖疫病观察与隔离池调度（aqua-4）
+
+模块包路径 `com.evops.aqua.disease`，在台账之上打通：发现异常症状开观察单 → 按风险等级推荐隔离池 → 调度前校验（等级/容量/消毒/权限）→ 调入隔离池 → 隔离中禁止混养和出池 → 兽医复核解除 → 数量逐笔返回原池，定时巡查检查全程留证。
+
+- 疫病观察单（`POST /api/aqua/disease/observations`）：症状、风险等级（LOW/MEDIUM/HIGH）、观察日期、**开单操作者必填**；批次须在养且当前在该池；requestId 幂等，重复开单返回首次单据，不产生第二条。
+- 隔离池档案（`/api/aqua/disease/isolation-pools`）：挂在养殖池上，登记可承接的最高风险等级与容量；`POST /{id}/disinfect` 登记消毒与有效期；`POST /{id}/dispatch-permission` 开关调度权限（须登记原因与操作者）。
+- 按风险等级推荐隔离池（`GET /api/aqua/disease/observations/{id}/recommend-pools`）：池等级不低于观察单风险等级才可承接；每个池给出 eligible 标记、剩余容量与**冲突原因预览**。
+- 隔离调度（`POST /api/aqua/disease/observations/{id}/dispatch`，requestId 幂等）：转移前逐条校验**池等级、调度权限、消毒状态、禁止混养、池容量**，**调度失败必须说明冲突原因**（如「容量不足：剩余容量4000，需要5000」），失败不落任何记录；成功则生成隔离调度单并写数量流水。
+- 隔离中的批次**禁止混养和出池**：已有隔离中批次的隔离池拒绝再调入（专池专用）；台账侧出池、换池统一拦截，须先由兽医复核解除。
+- 解除隔离（`POST /api/aqua/disease/isolations/{id}/lift`）：**必须由兽医复核**——兽医姓名与复核意见必填，缺一则拒；解除后数量按流水返回原池，重复解除幂等不重复写流水。
+- 数量变化逐笔记录：原池→隔离池（ISOLATE_IN）、隔离池→原池（RETURN_BACK）每笔一行 `t_dis_pool_movement`（含数量、日期、操作者），可经 `GET /api/aqua/disease/isolations/{id}/movements` 或 `GET /api/aqua/disease/movements?batchId=` 逐笔查询。
+- 定时巡查检查（Quartz 每日 06:30，`POST /api/aqua/disease/watch/run-check` 可手动触发同一逻辑）：对未完结观察单（观察中/已隔离）按日生成检查记录，**观察单+日期唯一——重启定时任务后重跑同日检查不多写记录；已有记录一律不更新，操作者（沿用开单人）不丢失**；已解除的观察单不再检查。
+- 全程留证：开单/调度/解除/消毒/权限调整均写 `t_dis_change_evidence`（含操作前后 JSON 快照与幂等请求号），可经 `GET /api/aqua/disease/evidence` 按对象或 requestId 追溯。
+
+验收：`mvn test -Dtest=DiseaseIsolationAcceptanceTest`，15 个检查点逐段输出报告，失败即停并给出停点。
+
 
 
