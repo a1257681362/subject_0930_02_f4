@@ -1,6 +1,7 @@
 package com.evops.aqua.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.evops.aqua.disease.service.IsolationGuard;
 import com.evops.aqua.dto.BatchStockRequest;
 import com.evops.aqua.dto.HarvestRequest;
 import com.evops.aqua.dto.TransferRequest;
@@ -20,6 +21,7 @@ import java.util.List;
 /**
  * 投苗批次（原始投苗单）。
  * 注意：不提供任何删除方法——原始投苗单不可删除。
+ * 隔离守卫：隔离中的批次禁止换池（混养）与出池；隔离池在隔离期间禁止投苗混养。
  */
 @Service
 public class SeedlingBatchService {
@@ -28,15 +30,18 @@ public class SeedlingBatchService {
     private final PondService pondService;
     private final TransferRecordMapper transferRecordMapper;
     private final HarvestRecordMapper harvestRecordMapper;
+    private final IsolationGuard isolationGuard;
 
     public SeedlingBatchService(SeedlingBatchMapper batchMapper,
                                 PondService pondService,
                                 TransferRecordMapper transferRecordMapper,
-                                HarvestRecordMapper harvestRecordMapper) {
+                                HarvestRecordMapper harvestRecordMapper,
+                                IsolationGuard isolationGuard) {
         this.batchMapper = batchMapper;
         this.pondService = pondService;
         this.transferRecordMapper = transferRecordMapper;
         this.harvestRecordMapper = harvestRecordMapper;
+        this.isolationGuard = isolationGuard;
     }
 
     /**
@@ -45,6 +50,7 @@ public class SeedlingBatchService {
     public SeedlingBatch stock(BatchStockRequest request) {
         Pond pond = pondService.getOrThrow(request.getPondId());
         pondService.requireActive(pond);
+        isolationGuard.requirePondOpenForStocking(pond.getId());
         Long duplicated = batchMapper.selectCount(
                 new QueryWrapper<SeedlingBatch>().eq("batch_no", request.getBatchNo()));
         if (duplicated != null && duplicated > 0) {
@@ -67,6 +73,7 @@ public class SeedlingBatchService {
     public TransferRecord transfer(Long batchId, TransferRequest request) {
         SeedlingBatch batch = getOrThrow(batchId);
         requireStocked(batch, "换池");
+        isolationGuard.requireBatchNotIsolated(batchId, "换池（混养）");
         Pond target = pondService.getOrThrow(request.getToPondId());
         pondService.requireActive(target);
         if (target.getId().equals(batch.getPondId())) {
@@ -93,6 +100,7 @@ public class SeedlingBatchService {
     public HarvestRecord harvest(Long batchId, HarvestRequest request) {
         SeedlingBatch batch = getOrThrow(batchId);
         requireStocked(batch, "出池");
+        isolationGuard.requireBatchNotIsolated(batchId, "出池");
         HarvestRecord record = new HarvestRecord();
         record.setBatchId(batch.getId());
         record.setPondId(batch.getPondId());
